@@ -1,0 +1,36 @@
+name: Release
+
+on: push
+
+jobs:
+  build:
+    name: Build and Release
+    runs-on: windows-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Build release binary
+        run: cargo build --release --verbose
+
+      - name: Package binary
+        run: |
+          mkdir compiler_monitor-${{ github.ref_name }}-windows-x64
+          cp target/release/compiler_monitor.exe compiler_monitor-${{ github.ref_name }}-windows-x64/
+          cp README.md compiler_monitor-${{ github.ref_name }}-windows-x64/
+          cp LICENSE compiler_monitor-${{ github.ref_name }}-windows-x64/ 2>$null || echo "No LICENSE file"
+          Compress-Archive -Path compiler_monitor-${{ github.ref_name }}-windows-x64 -DestinationPath compiler_monitor-${{ github.ref_name }}-windows-x64.zip
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        if: github.ref_type == 'tag'
+        with:
+          files: |
+            compiler_monitor-${{ github.ref_name }}-windows-x64.zip
+            target/release/compiler_monitor.exe
