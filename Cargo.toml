@@ -1,0 +1,29 @@
+[package]
+name = "compiler_monitor"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "compiler_monitor"
+path = "src/main.rs"
+
+[[bin]]
+name = "integration_test"
+path = "integration_test.rs"
+
+[dependencies]
+windows = { version = "0.58", features = [
+    "Win32_Foundation",
+    "Win32_System_Diagnostics_Etw",
+    "Win32_System_Threading",
+    "Win32_Security",
+    "Win32_System_Diagnostics_ToolHelp",
+    "Win32_System_ProcessStatus",
+    "Win32_System_Memory",
+] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+regex = "1.10"
+clap = { version = "4.5", features = ["derive"] }
+anyhow = "1.0"
+wmi = "0.13"
