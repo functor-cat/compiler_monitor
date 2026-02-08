@@ -1,153 +1,97 @@
 # Compiler Monitor
 
-A Windows-based compiler process monitor that captures compilation commands and generates `compile_commands.json` for use with IDE tools, clangd, and other development tools.
+Captures Windows compilation commands and generates `compile_commands.json` for clangd and other IDE tools.
 
-## How It Works
+## Installation
 
-This tool uses **WMI (Windows Management Instrumentation)** for process monitoring, similar to Process Monitor's ETW approach. It monitors process creation events in real-time and captures:
+Download the latest release from the [GitHub Releases page](https://github.com/functor-cat/compiler_monitor/releases).
 
-- Process command line arguments
-- Working directory
-- Response file contents (inlined before they're deleted)
+Extract `compiler_monitor.exe` and add it to your PATH, or run it directly.
 
-## Features
+## Quick Start
 
-- ✅ **Real-time monitoring** using Windows WMI
-- ✅ **Response file handling** - automatically detects `@file.rsp` arguments and inlines them
-- ✅ **Response file caching** - saves response files before build systems delete them
-- ✅ **Pattern matching** - monitor specific compilers (cl.exe, clang.exe, etc.)
-- ✅ **Fast recording** - each compilation saved to individual file (no JSON overhead)
-- ✅ **Two-step workflow** - record fast, collect once
-- ✅ **Standards compliant** - generates JSON Compilation Database format
+**Step 1: Record compilation commands**
+```bash
+# Start monitoring (monitors cl.exe by default)
+compiler_monitor.exe record
+
+# In another terminal, build your project
+cmake --build . --config Debug
+
+# Stop recording with Ctrl+C
+```
+
+**Step 2: Collect into compile_commands.json**
+```bash
+compiler_monitor.exe collect
+```
+
+That's it! Your `compile_commands.json` is ready.
 
 ## Usage
 
-### Two-Step Workflow
+### Recording
 
-The compiler monitor now uses a two-step approach for better performance:
-
-**Step 1: Record** - Monitor and save each compilation to individual files
 ```bash
-# Start recording (monitor cl.exe)
-.\target\release\compiler_monitor.exe record
-
-# Or use the alias
-.\target\release\compiler_monitor.exe r
+# Monitor cl.exe (default)
+compiler_monitor.exe record
 
 # Monitor clang instead
-.\target\release\compiler_monitor.exe r --pattern "clang.exe"
+compiler_monitor.exe record --pattern "clang.exe"
+
+# Custom cache directory
+compiler_monitor.exe record --cache-dir my_cache
 ```
 
-While recording is active, build your project in another terminal:
+While recording runs, build your project in another terminal. Press **Ctrl+C** when done.
+
+### Collecting
+
 ```bash
-cd test\build
-cmake --build . --config Debug
-```
-
-Press **Ctrl+C** to stop recording when done.
-
-**Step 2: Collect** - Merge all recorded commands into compile_commands.json
-```bash
-# Collect all commands
-.\target\release\compiler_monitor.exe collect
-
-# Or use the alias
-.\target\release\compiler_monitor.exe c
+# Generate compile_commands.json
+compiler_monitor.exe collect
 
 # Custom output location
-.\target\release\compiler_monitor.exe c --output my_compile_commands.json
+compiler_monitor.exe collect --output path/to/compile_commands.json
+
+# Read from custom cache directory
+compiler_monitor.exe collect --cache-dir my_cache
 ```
 
-### Why Two Steps?
+### Aliases
 
-- **Fast recording**: Each compilation is saved to its own file (no JSON merging overhead)
-- **No slowdown**: Recording stays fast even with thousands of compilations
-- **One-time merge**: Collection happens once at the end, not on every compilation
-
-### Basic Usage
-
+Use `r` for record and `c` for collect:
 ```bash
-# Terminal 1: Start recording
-cargo run --release -- record
-
-# Terminal 2: Build your project
-cd test\build
-cmake --build . --config Debug
-
-# Terminal 1: Stop recording (Ctrl+C), then collect
-cargo run --release -- collect
+compiler_monitor.exe r
+compiler_monitor.exe c
 ```
 
-### Running the Integration Test
+## How It Works
 
-A full integration test is provided that:
-- Builds a CMake project with Visual Studio generator
-- Monitors all cl.exe invocations in parallel
-- Saves each command to cache
-- Collects and validates the generated compile_commands.json
+Monitors Windows processes via WMI to capture:
+- Compiler command lines (cl.exe, clang.exe, etc.)
+- Working directories
+- Response file contents (inlined before deletion)
 
-```bash
-# Build and run the integration test
-cargo run --release --bin integration_test
-```
-
-The test project is located in the `test/` directory and includes multiple C++ source files to generate realistic compile commands.
+Records each compilation to a separate file for speed, then merges into `compile_commands.json` when you collect.
 
 ## Requirements
 
-- **Windows** (uses Windows-specific APIs)
-- **Rust** 1.70 or later
-- **CMake** (for integration test)
-- **Visual Studio** with MSVC (for integration test)
+- Windows
 
-## Command Line Options
+## Building from Source
 
-### Record Mode (alias: r)
-```
-Options:
-  -p, --pattern <PATTERN>      Process name pattern to monitor [default: cl.exe]
-  -c, --cache-dir <CACHE_DIR>  Directory to save recorded commands [default: .compiler_monitor_cache]
-  -h, --help                   Print help
-```
+Requires Rust 1.70 or later.
 
-### Collect Mode (alias: c)
-```
-Options:
-  -c, --cache-dir <CACHE_DIR>  Directory containing recorded commands [default: .compiler_monitor_cache]
-  -o, --output <OUTPUT>        Output file for compile_commands.json [default: compile_commands.json]
-  -h, --help                   Print help
-```
+```bash
+# Clone the repository
+git clone https://github.com/functor-cat/compiler_monitor.git
+cd compiler_monitor
 
-## Project Structure
+# Build release binary
+cargo build --release
 
-```
-compiler_monitor/
-├── src/
-│   └── main.rs              # Main compiler monitor application
-├── integration_test.rs       # Integration test with threading
-├── test/                     # CMake test project
-│   ├── CMakeLists.txt
-│   └── src/
-│       ├── main.cpp
-│       ├── mathops.cpp/h
-│       ├── utils.cpp/h
-│       └── calculator.cpp/h
-├── .compiler_monitor_cache/  # Individual command files (created on record)
-├── Cargo.toml
-└── README.md
-```
-
-## Example Output
-
-```json
-[
-  {
-    "directory": "C:\\projects\\myapp\\src",
-    "command": "cl.exe /c /Zi /Od /I..\\include main.cpp",
-    "file": "C:\\projects\\myapp\\src\\main.cpp",
-    "arguments": ["cl.exe", "/c", "/Zi", "/Od", "/I..\\include", "main.cpp"]
-  }
-]
+# Binary will be at target/release/compiler_monitor.exe
 ```
 
 ## License
