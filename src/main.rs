@@ -50,6 +50,11 @@ use std::time::Duration;
 use wmi::{COMLibrary, WMIConnection, Variant};
 use windows::Win32::Foundation::*;
 use windows::Win32::System::Diagnostics::ToolHelp::*;
+use windows::Win32::System::Threading::{OpenProcess, PROCESS_QUERY_INFORMATION, PROCESS_VM_READ};
+use windows::Win32::System::Diagnostics::Debug::ReadProcessMemory;
+use ntapi::ntpsapi::{NtQueryInformationProcess, ProcessBasicInformation, PROCESS_BASIC_INFORMATION};
+use ntapi::ntpebteb::PEB;
+use ntapi::ntrtl::RTL_USER_PROCESS_PARAMETERS;
 
 /// Command line arguments for the compiler monitor
 #[derive(Parser, Debug)]
@@ -458,9 +463,103 @@ fn monitor_with_wmi(monitor: Arc<CompilerMonitor>) -> Result<()> {
     }
 }
 
+/// Get the current working directory of a process using NtQueryInformationProcess
+/// This reads the PEB (Process Environment Block) to get the real working directory
+fn get_process_working_directory(pid: u32) -> Option<String> {
+    unsafe {
+        // Open the process with query and read permissions
+        let handle = OpenProcess(
+            PROCESS_QUERY_INFORMATION | PROCESS_VM_READ,
+            false,
+            pid,
+        ).ok()?;
+
+        // Query basic process information to get PEB address
+        let mut pbi: PROCESS_BASIC_INFORMATION = std::mem::zeroed();
+        let mut return_length: u32 = 0;
+        
+        let status = NtQueryInformationProcess(
+            handle.0 as *mut _,
+            ProcessBasicInformation,
+            &mut pbi as *mut _ as *mut _,
+            std::mem::size_of::<PROCESS_BASIC_INFORMATION>() as u32,
+            &mut return_length,
+        );
+        
+        if status != 0 {
+            let _ = CloseHandle(handle);
+            return None;
+        }
+
+        // Read the PEB from the target process
+        let mut peb: PEB = std::mem::zeroed();
+        let mut bytes_read: usize = 0;
+        
+        let success = ReadProcessMemory(
+            handle,
+            pbi.PebBaseAddress as *const _,
+            &mut peb as *mut _ as *mut _,
+            std::mem::size_of::<PEB>(),
+            Some(&mut bytes_read),
+        );
+        
+        if success.is_err() || bytes_read != std::mem::size_of::<PEB>() {
+            let _ = CloseHandle(handle);
+            return None;
+        }
+
+        // Read the RTL_USER_PROCESS_PARAMETERS from the target process
+        let mut upp: RTL_USER_PROCESS_PARAMETERS = std::mem::zeroed();
+        
+        let success = ReadProcessMemory(
+            handle,
+            peb.ProcessParameters as *const _,
+            &mut upp as *mut _ as *mut _,
+            std::mem::size_of::<RTL_USER_PROCESS_PARAMETERS>(),
+            Some(&mut bytes_read),
+        );
+        
+        if success.is_err() || bytes_read != std::mem::size_of::<RTL_USER_PROCESS_PARAMETERS>() {
+            let _ = CloseHandle(handle);
+            return None;
+        }
+
+        // Read the CurrentDirectoryPath string from the target process
+        let path_length = upp.CurrentDirectory.DosPath.Length as usize;
+        if path_length == 0 || path_length > 32768 {
+            let _ = CloseHandle(handle);
+            return None;
+        }
+
+        let mut path_buffer: Vec<u16> = vec![0u16; path_length / 2 + 1];
+        
+        let success = ReadProcessMemory(
+            handle,
+            upp.CurrentDirectory.DosPath.Buffer as *const _,
+            path_buffer.as_mut_ptr() as *mut _,
+            path_length,
+            Some(&mut bytes_read),
+        );
+        
+        let _ = CloseHandle(handle);
+        
+        if success.is_err() || bytes_read != path_length {
+            return None;
+        }
+
+        // Convert to String, removing trailing backslash if present
+        let mut path = String::from_utf16_lossy(&path_buffer[..path_length / 2]);
+        if path.ends_with('\\') {
+            path.pop();
+        }
+        
+        Some(path)
+    }
+}
+
 fn get_process_info_wmi(wmi_con: &WMIConnection, pid: u32) -> Result<(String, String)> {
-    // Query WMI for process information
-    let query = format!("SELECT CommandLine, ExecutablePath FROM Win32_Process WHERE ProcessId = {}", pid);
+    // Query WMI for process information (command line)
+    let query = format!("SELECT CommandLine FROM Win32_Process WHERE ProcessId = {}", pid);
     
     let results: Vec<std::collections::HashMap<String, Variant>> = wmi_con
         .raw_query(&query)
@@ -480,29 +579,15 @@ fn get_process_info_wmi(wmi_con: &WMIConnection, pid: u32) -> Result<(String, St
         })
         .unwrap_or_default();
 
-    let exe_path = result
-        .get("ExecutablePath")
-        .and_then(|v| match v {
-            Variant::String(s) => Some(s.clone()),
-            _ => None,
-        })
-        .unwrap_or_default();
-
-    // Extract working directory from executable path
-    let work_dir = if !exe_path.is_empty() {
-        PathBuf::from(&exe_path)
-            .parent()
-            .map(|p| p.to_string_lossy().to_string())
-            .unwrap_or_else(|| std::env::current_dir()
+    // Get the real working directory using NtQueryInformationProcess
+    let work_dir = get_process_working_directory(pid)
+        .unwrap_or_else(|| {
+            // Fallback to current directory if we can't read the process
+            std::env::current_dir()
                 .unwrap_or_default()
                 .to_string_lossy()
-                .to_string())
-    } else {
-        std::env::current_dir()
-            .unwrap_or_default()
-            .to_string_lossy()
-            .to_string()
-    };
+                .to_string()
+        });
 
     Ok((cmd_line, work_dir))
 }
